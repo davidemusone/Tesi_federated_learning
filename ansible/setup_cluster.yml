@@ -1,0 +1,107 @@
+---
+- name: Setup completo cluster Jetson per Federated Learning
+  hosts: workers
+  become: yes
+  tasks:
+
+    # === setup_cluster.yml ===
+    - name: Aggiorna il gestore pacchetti apt
+      apt:
+        upgrade: dist
+
+    - name: Installa dipendenze di sistema, pacchetti C/C++ e NumPy via apt
+      apt:
+        name:
+          - python3-pip
+          - python3-venv
+          - python3-dev
+          - python3-numpy
+          - python3-setuptools
+          - python3-wheel
+          - build-essential
+          - libopenblas-dev
+          - cython3
+        state: present
+
+    - name: Crea directory del progetto Flower
+      file:
+        path: /home/picocluster/flower_node
+        state: directory
+        owner: picocluster
+        group: picocluster
+
+    - name: Crea ambiente virtuale Python (ereditando i pacchetti di sistema)
+      command: python3 -m venv --system-site-packages /home/picocluster/flower_node/venv
+      args:
+        creates: /home/picocluster/flower_node/venv
+
+    - name: Step 1 - Aggiorna pip, setuptools e installa wheel/cython nel virtualenv
+      pip:
+        name:
+          - pip
+          - setuptools
+          - wheel
+          - cython
+        state: latest
+        virtualenv: /home/picocluster/flower_node/venv
+
+    - name: Step 2 - Installa Flower con vincoli di versione per Python 3.6
+      pip:
+        name:
+          - "flwr==0.18.0"
+        virtualenv: /home/picocluster/flower_node/venv
+        update_cache: yes
+
+    # === fix_numpy_env.yml ===
+    - name: Assicurati che NumPy di sistema sia installato via APT
+      apt:
+        name: python3-numpy
+        state: present
+
+    - name: Collega (symlink) il NumPy di sistema all'interno del virtualenv
+      file:
+        src: "/usr/lib/python3/dist-packages/numpy"
+        dest: "/home/picocluster/flower_node/venv/lib/python3.6/site-packages/numpy"
+        state: link
+        force: yes
+
+    - name: Collega anche le cartelle egg-info/dist-info di NumPy
+      file:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        state: link
+        force: yes
+      loop:
+        - { src: '/usr/lib/python3/dist-packages/numpy-1.13.3.egg-info', dest: '/home/picocluster/flower_node/venv/lib/python3.6/site-packages/numpy-1.13.3.egg-info' }
+
+    # === fix_illegal_instruction.yml ===
+    - name: Rimuovi NumPy installato via pip per usare quello di sistema
+      pip:
+        name: numpy
+        state: absent
+        virtualenv: /home/picocluster/flower_node/venv
+
+    - name: Imposta OPENBLAS_CORETYPE globale in /etc/environment
+      lineinfile:
+        path: /etc/environment
+        line: "OPENBLAS_CORETYPE=ARMV8"
+        state: present
+
+    - name: Imposta OPENBLAS_CORETYPE nel bashrc dell'utente
+      lineinfile:
+        path: /home/picocluster/.bashrc
+        line: "export OPENBLAS_CORETYPE=ARMV8"
+        state: present
+
+    - name: Inserisci la variabile d'ambiente nello script activate del venv
+      lineinfile:
+        path: /home/picocluster/flower_node/venv/bin/activate
+        line: "export OPENBLAS_CORETYPE=ARMV8"
+        state: present
+
+    # === deploy_code.yml ===
+    - name: Copia directory di progetto sui nodi
+      copy:
+        src: /home/picocluster/flower_node/
+        dest: /home/picocluster/flower_node/
+        mode: '0755'
