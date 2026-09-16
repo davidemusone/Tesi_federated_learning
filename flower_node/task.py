@@ -35,7 +35,7 @@ def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def load_data(partition_id: int, num_partitions: int, batch_size: int = 16):
+def load_data(partition_id: int, num_partitions: int, batch_size: int = 64):
     """Carica FER-2013 da cartella locale con ImageFolder e imposta i DataLoader per risparmiare RAM."""
     transform = Compose([
         Grayscale(num_output_channels=1),

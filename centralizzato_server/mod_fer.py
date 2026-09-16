@@ -1,11 +1,24 @@
 import os
 import time
+import random
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from torchvision.transforms import Compose, Grayscale, Normalize, ToTensor
+
+SEED = 42
+
+def set_seed(seed: int = SEED):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 # 1. Definizione dell'Architettura CNN (Identica a task.py)
 class Net(nn.Module):
@@ -84,6 +97,7 @@ def main():
     LEARNING_RATE = 0.01
     DATA_DIR = "./data"  # Assicurati che contenga /train e /test
     
+    set_seed(SEED)
     device = get_device()
     print(f"Utilizzo del device: {device}")
     
@@ -97,8 +111,11 @@ def main():
     # Caricamento dataset centralizzato
     trainset = ImageFolder(root=os.path.join(DATA_DIR, "train"), transform=transform)
     testset = ImageFolder(root=os.path.join(DATA_DIR, "test"), transform=transform)
+
+    generator = torch.Generator()
+    generator.manual_seed(SEED)
     
-    trainloader = DataLoader(trainset, batch_size=BATCH_SIZE, shuffle=True)
+    trainloader = DataLoader(trainset, batch_size=BATCH_SIZE, shuffle=True, generator=generator)
     testloader = DataLoader(testset, batch_size=BATCH_SIZE, shuffle=False)
     
     # Inizializzazione Modello, Loss e Ottimizzatore

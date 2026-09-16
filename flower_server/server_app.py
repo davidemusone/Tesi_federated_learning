@@ -3,8 +3,11 @@
 import argparse
 import torch
 import flwr as fl
-from task import Net, get_device, load_centralized_dataset, test
+import csv
+import os
+from task import Net, get_device, load_centralized_dataset, test, set_seed
 
+set_seed()
 
 def get_initial_parameters():
     """Estrae i pesi iniziali dalla rete PyTorch e li converte nel formato Flower."""
@@ -13,7 +16,7 @@ def get_initial_parameters():
     return fl.common.weights_to_parameters(weights)
 
 
-def get_evaluate_fn():
+def get_evaluate_fn(mode, log_path):
     """Restituisce la funzione di valutazione globale per il Server."""
     device = get_device()
     
@@ -24,6 +27,13 @@ def get_evaluate_fn():
         testloader = None
 
     current_round = 0
+
+    # Scrive l'header solo se il file non esiste ancora
+    file_exists = os.path.isfile(log_path)
+    if not file_exists:
+        with open(log_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["round", "mode", "loss", "accuracy"])
 
     def evaluate(weights, *args, **kwargs):
         nonlocal current_round
@@ -46,7 +56,12 @@ def get_evaluate_fn():
             f"\n[SERVER - Round {current_round}] Valutazione Globale -> "
             f"Loss: {loss:.4f}, Accuracy: {accuracy:.4f}\n"
         )
-        
+
+        # Log su file, una riga per round
+        with open(log_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([current_round, mode, float(loss), float(accuracy)])
+
         current_round += 1
         
         return float(loss), {"accuracy": float(accuracy)}
@@ -56,6 +71,7 @@ def get_evaluate_fn():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Flower Server")
+    parser.add_argument("--mode", type=str, default="iid", choices=["iid", "non_iid"], help="Etichetta della modalità usata dai client in questo esperimento (solo per il log)")
     parser.add_argument("--num-clients", type=int, default=4, help="Numero di nodi/client attesi per il round")
     parser.add_argument("--rounds", type=int, default=10, help="Numero di round di addestramento")
     args = parser.parse_args()
@@ -72,7 +88,7 @@ if __name__ == "__main__":
         min_available_clients=NUM_CLIENTS,  # Impostato dinamicamente
         min_eval_clients=NUM_CLIENTS,       # Impostato dinamicamente
         initial_parameters=get_initial_parameters(),
-        eval_fn=get_evaluate_fn(),
+        eval_fn=get_evaluate_fn(mode=args.mode, log_path=f"results_{args.mode}.csv"),
     )
 
     grpc_max_message_length = 1000 * 1024 * 1024

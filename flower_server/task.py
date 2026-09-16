@@ -2,7 +2,8 @@
 
 import os
 os.environ["OPENBLAS_CORETYPE"] = "ARMV8"
-
+import random
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,6 +11,16 @@ from torch.utils.data import DataLoader, Subset
 from torchvision.datasets import ImageFolder
 from torchvision.transforms import Compose, Grayscale, ToTensor, Normalize
 
+SEED = 42
+
+def set_seed(seed: int = SEED):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 class Net(nn.Module):
     def __init__(self):
@@ -33,9 +44,44 @@ class Net(nn.Module):
 def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def _iid_split(num_samples: int, num_partitions: int, partition_id: int, seed: int = SEED):
+    """Shuffle con seed fisso, poi split in blocchi contigui."""
+    rng = np.random.RandomState(seed)
+    indices = np.arange(num_samples)
+    rng.shuffle(indices)
 
-def load_data(partition_id: int, num_partitions: int, batch_size: int = 16):
-    """Carica FER-2013 da cartella locale con ImageFolder e imposta i DataLoader per risparmiare RAM."""
+    per_partition = num_samples // num_partitions
+    start = partition_id * per_partition
+    end = start + per_partition
+    return indices[start:end].tolist()
+
+def _dirichlet_split(targets, num_partitions: int, partition_id: int, alpha: float = 0.5, seed: int = SEED):
+    """Partizionamento non-IID per classe dominante, via distribuzione di Dirichlet.
+    alpha basso -> ogni client vede quasi solo 1-2 classi (molto sbilanciato).
+    alpha alto  -> distribuzione quasi uniforme tra client (vicino a IID)."""
+    rng = np.random.RandomState(seed)
+    targets = np.array(targets)
+    num_classes = len(np.unique(targets))
+
+    partitions = [[] for _ in range(num_partitions)]
+
+    for c in range(num_classes):
+        class_indices = np.where(targets == c)[0]
+        rng.shuffle(class_indices)
+
+        proportions = rng.dirichlet(alpha * np.ones(num_partitions))
+        split_points = (np.cumsum(proportions) * len(class_indices)).astype(int)[:-1]
+        class_splits = np.split(class_indices, split_points)
+
+        for i, split in enumerate(class_splits):
+            partitions[i].extend(split.tolist())
+
+    rng.shuffle(partitions[partition_id])
+    return partitions[partition_id]
+
+def load_data(partition_id: int, num_partitions: int, batch_size: int = 64,
+              partition_mode: str = "iid", alpha: float = 0.5):
+    """Carica FER-2013 con partizionamento IID o non-IID selezionabile."""
     transform = Compose([
         Grayscale(num_output_channels=1),
         ToTensor(),
@@ -45,25 +91,31 @@ def load_data(partition_id: int, num_partitions: int, batch_size: int = 16):
     trainset = ImageFolder(root="/home/picocluster/flower_node/data/train", transform=transform)
     testset = ImageFolder(root="/home/picocluster/flower_node/data/test", transform=transform)
 
-    num_samples_train = len(trainset) // num_partitions
-    train_indices = list(range(partition_id * num_samples_train, (partition_id + 1) * num_samples_train))
-    
-    num_samples_test = len(testset) // num_partitions
-    test_indices = list(range(partition_id * num_samples_test, (partition_id + 1) * num_samples_test))
+    if partition_mode == "iid":
+        train_indices = _iid_split(len(trainset), num_partitions, partition_id)
+        test_indices = _iid_split(len(testset), num_partitions, partition_id)
+    elif partition_mode == "non_iid":
+        train_indices = _dirichlet_split(trainset.targets, num_partitions, partition_id, alpha=alpha)
+        test_indices = _dirichlet_split(testset.targets, num_partitions, partition_id, alpha=alpha)
+    else:
+        raise ValueError(f"partition_mode sconosciuto: {partition_mode!r} (usa 'iid' o 'non_iid')")
 
-    # num_workers=0 evita l'uso di multiprocessing che satura la RAM della Jetson Nano
+    generator = torch.Generator()
+    generator.manual_seed(SEED)
+
     trainloader = DataLoader(
-        Subset(trainset, train_indices), 
-        batch_size=batch_size, 
-        shuffle=True, 
-        num_workers=0, 
-        pin_memory=False
+        Subset(trainset, train_indices),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=False,
+        generator=generator
     )
     testloader = DataLoader(
-        Subset(testset, test_indices), 
-        batch_size=batch_size, 
-        shuffle=False, 
-        num_workers=0, 
+        Subset(testset, test_indices),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
         pin_memory=False
     )
 

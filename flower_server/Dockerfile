@@ -35,7 +35,10 @@ RUN pip install \
 # Nota: La versione CPU basta per orchestrare e aggregare i pesi su Flower
 RUN pip install torch==1.10.0 torchvision==0.11.1 -f https://download.pytorch.org/whl/cpu/torch_stable.html
 
-# 3. Installazione di Flower 0.18.0 e dipendenze ausiliarie
+# 3. Installazione di librerie ausiliarie per la gestione dei dati e visualizzazione
+RUN pip install matplotlib==3.3.4 pandas==1.1.5
+
+# 4. Installazione di Flower 0.18.0 e dipendenze ausiliarie
 RUN pip install flwr==0.18.0
 
 # Imposta la directory di lavoro
@@ -43,6 +46,8 @@ WORKDIR /app
 
 COPY server_app.py /app/server_app.py
 COPY task.py /app/task.py
+COPY data /app/data
+COPY grafico.py /app/grafico.py
 
 # Porta predefinita utilizzata da Flower per gRPC
 EXPOSE 8080
